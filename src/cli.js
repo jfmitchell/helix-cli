@@ -122,6 +122,9 @@ export default class CLI {
       if (!this._commands.content) {
         this._commands.content = (await import('./content/content.js')).default();
       }
+      if (!this._commands.config) {
+        this._commands.config = (await import('./config/config.js')).default();
+      }
     }
     return this;
   }

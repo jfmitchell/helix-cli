@@ -1,0 +1,8 @@
+indices:
+  pages:
+    include:
+      - /**
+    properties:
+      title:
+        select: head > title
+        value: textContent(el)

@@ -29,6 +29,7 @@ Commands:
   aem up       Run a AEM development server
   aem import   Run the AEM import server
   aem content  Manage local da.live content
+  aem config   Manage repository-owned AEM configuration
 
 Options:
   --version                Show version number                         [boolean]
@@ -44,6 +45,148 @@ use <command> --help to get command specific details.
 
 for more information, find our manual at https://github.com/adobe/helix-cli
 ```
+
+## Managing AEM configuration
+
+`aem config deploy` reconciles repository-defined organisation users, shared profiles
+and sites with the AEM Admin API. Configuration stays in your site's repository;
+the CLI does not copy it elsewhere or depend on a repository-local admin script.
+
+Run from the repository containing `site-config/`. The command reads configuration
+from the current working directory and derives the AEM organisation from the
+**owner of the Git `origin` remote**, lowercased. For example,
+`https://github.com/Example/website.git` and `git@github.com:Example/website.git`
+both select `example`. HTTPS and SSH origins are supported; a missing, invalid or
+local-filesystem origin fails before contacting the Admin API.
+
+The Git owner must match the AEM organisation; a fork's `origin` targets the fork
+owner, not `upstream`.
+
+```sh
+aem config deploy --dry-run                # preview changes; no writes
+aem config deploy                          # create/update configured resources
+aem config deploy --prune --dry-run         # preview removals too
+aem config deploy --prune                   # apply changes and remove extra resources
+```
+
+**Nothing is deleted by default. `--prune` deletes live users, sites and profiles
+absent from the repository across the entire configured organisation**, including
+resources created manually. Use it only with a complete configuration inventory,
+and review `--prune --dry-run` first. Pruning runs after successful reconciliation;
+failed validation, incomplete live inventories or failed updates stop the run.
+Operations are not transactional: an API failure can leave earlier changes applied.
+
+Supply `AEM_ADMIN_TOKEN` in the environment or the current repository's ignored
+`.dev.vars`. It must have permission to manage the organisation's users, profiles
+and sites. The default endpoint is `https://admin.hlx.page`; `AEM_ADMIN_BASE` can
+select another Admin API origin. Environment variables override `.dev.vars`.
+Use `${ENV_VAR}` placeholders for config secrets, not literal credentials.
+Missing placeholders fail before network access, including in dry-run mode.
+For site access restricted by `access.admin.apiKeyId`, set `AEM_CI_KEY_ID` to the
+authenticating key's ID; that ID must remain in every configured restriction.
+
+The expected layout is:
+
+```text
+site-config/
+  org/users.json                        # array of { email, roles }; retain an admin
+  profiles/<name>/
+    profile.json                        # shared headers, metadata, sidekick, public, etc.
+    content/query.yaml                  # optional; applied to each extending site
+  sites/<name>/
+    site.json                           # code, content, extends.profile, etc.
+    access.json                         # optional access override
+    headers.json                        # optional headers override
+    cdn/prod.json                       # optional production CDN override
+    robots.txt                          # optional robots definition
+    content/query.yaml                  # optional; overrides the profile query
+    content/sitemap.yaml                # optional sitemap definition
+```
+
+Users, profiles and sites directories must exist, users must retain at least one
+`admin`, and at least one site must be configured. Each site requires `code.owner`, `code.repo`
+and `content.source`; a non-`sourcebus` source also requires `url`. Referenced
+profiles must exist. Sites still declare their own code repository in `site.json`;
+it is not automatically replaced by the Git origin.
+
+Deploy preserves unmanaged live fields (including API keys, secrets and generated
+content bus IDs), while reconciling repository-managed fields. Removing a managed
+field from a document removes that field from its live configuration, even without
+`--prune`; omitting site access resets it to inherited organisation access. Optional
+query/sitemap endpoints are not deleted when their files are removed.
+The command updates query and sitemap **definitions only**: it does not re-index,
+generate sitemaps, purge caches, sync code/content, or change existing CI workflows.
+
+### Creating configuration files
+
+Run these commands in your site's Git repository. They create minimal JSON only,
+without contacting the Admin API or deploying anything:
+
+```sh
+aem config profile add shared
+aem config user add admin@example.test --roles admin
+aem config site add my-site --profile shared
+aem config site add content-site --source-type markup \
+  --source-url https://content.example.test
+```
+
+Omit the name/email or required flags to collect them interactively:
+`aem config site add`, `aem config profile add`, or `aem config user add`.
+When all mandatory inputs are supplied, no prompts are shown. Non-terminal runs
+must supply missing inputs explicitly. User roles are required (no automatic admin
+grant); `--roles` accepts space- or comma-separated roles.
+
+Site content defaults to `sourcebus`; supported external source types are `markup`,
+`google` and `onedrive`, each requiring an HTTP(S) `--source-url` without embedded
+credentials. Site code owner/repo default to Git `origin`. Sites and profiles accept
+`--title`, defaulting to their name; `--profile` must reference an existing profile.
+
+Creation bootstraps missing `org/`, `profiles/`, `sites/` and `org/users.json`.
+An incomplete tree is allowed while authoring, but deploy still requires a site and
+an organisation admin. Existing sites/profiles and case-insensitive duplicate users
+are rejected, never overwritten. Existing file contents are preserved, and malformed
+config, symlinks, cancellation and detected concurrent edits abort the operation.
+
+### Importing deployed configuration
+
+```sh
+aem config import --dry-run                # preview the whole organisation
+aem config import                          # create a new local site-config/
+aem config import --overwrite              # preview and confirm replacement
+aem config import --overwrite --yes        # explicit replacement in scripts
+```
+
+Import uses the same Git identity, Admin API credentials and current-directory
+`.dev.vars` conventions as deploy. It performs **GET requests only** and imports
+the entire organisation's users, profiles and sites, including each site's query
+and sitemap definitions. Site-level configuration preserves explicit profile
+inheritance and overrides rather than flattening aggregated profile values.
+Each imported query is stored with its site; existing profile queries remain a
+deploy fallback only for sites without a site query.
+
+Import excludes API key/token stores, audit/version metadata, user IDs and generated
+content bus IDs. Recognized secret-valued fields, sensitive headers and credential-
+bearing URLs become deterministic `${AEM_CONFIG_...}` placeholders. Only the
+required variable names are reported; supply their values separately through the
+environment or ignored `.dev.vars` before deploy. Import is not a credentials
+backup: inspect the generated config and keep secrets out of Git.
+
+The preview lists file additions, updates and removals, without displaying values.
+`--dry-run` writes nothing. Replacing an existing `site-config/` requires
+`--overwrite` and affirmative terminal confirmation; scripts need
+`--overwrite --yes`. `--yes` alone never authorizes replacement. Files absent from
+the imported snapshot are removed locally only during explicit replacement.
+Nothing outside `site-config/` is replaced; import does not commit, push, deploy,
+prune live resources or alter CI.
+
+The CLI validates the full snapshot before staging it, rejects stale local previews,
+serializes its writers with `.site-config.lock`, and restores the original tree if
+installation fails. Non-CLI editors do not share this lock: avoid editing config
+during installation. Inventories are rechecked to detect resource churn, but the
+Admin API does not provide an atomic organisation snapshot; import while deployed
+configuration is stable. Missing listed resources, incomplete inventories and
+unsupported/malformed configuration fail rather than silently importing a partial
+tree.
 
 ## Starting development
 
@@ -326,4 +469,3 @@ To solve, first uninstall the old version, then install again with the new name:
 npm uninstall -g @adobe/helix-cli
 npm install -g @adobe/aem-cli
 ```
-

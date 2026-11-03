@@ -1,0 +1,4 @@
+sitemaps:
+  default:
+    origin: https://www.example.test
+    destination: /sitemap.xml

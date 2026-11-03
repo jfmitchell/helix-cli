@@ -1,0 +1,4 @@
+[
+  { "email": "admin@example.test", "roles": ["admin", "config"] },
+  { "email": "author@example.test", "roles": ["author"] }
+]

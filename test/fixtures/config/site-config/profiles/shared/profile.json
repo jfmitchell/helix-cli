@@ -1,0 +1,6 @@
+{
+  "headers": {
+    "/**": [{ "key": "x-example", "value": "shared" }]
+  },
+  "metadata": { "/**": { "theme": "example" } }
+}

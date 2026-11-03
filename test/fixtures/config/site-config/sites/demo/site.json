@@ -1,0 +1,6 @@
+{
+  "title": "Example site",
+  "code": { "owner": "example", "repo": "website" },
+  "content": { "source": { "type": "sourcebus" } },
+  "extends": { "profile": "shared" }
+}
